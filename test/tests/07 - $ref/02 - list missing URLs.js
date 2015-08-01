@@ -5,8 +5,8 @@ describe("$ref 02", function () {
 			"items": {"$ref": "http://example.com/schema#"}
 		};
 		tv4.validate([], schema);
-		assert.notProperty(tv4.missing, "http://example.com/schema");
-		assert.length(tv4.missing, 0);
+		assert.property(tv4.missing, "http://example.com/schema");
+		assert.length(tv4.missing, 1);
 		//return !tv4.missing["http://example.com/schema"]
 		//	&& tv4.missing.length == 0;
 	});

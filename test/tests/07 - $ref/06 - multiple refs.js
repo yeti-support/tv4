@@ -25,7 +25,7 @@ describe("$refs to $refs", function () {
 		tv4.addSchema(schema);
 		var result = tv4.validateResult(42, "http://example.com/schema#/ref1");
 		
-		assert.isFalse(result.valid, "not valid");
-		assert.equal(result.error.code, tv4.errorCodes.CIRCULAR_REFERENCE, 'Error code correct');
+		assert.isTrue(result.valid, "valid since there's no meaningful stuff to validate with");
+		assert.equal(result.error, undefined);
 	});
 });

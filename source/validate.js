@@ -79,22 +79,99 @@ ValidatorContext.prototype.addFormat = function (format, validator) {
 	}
 	this.formatValidators[format] = validator;
 };
-ValidatorContext.prototype.resolveRefs = function (schema, urlHistory) {
-	if (schema['$ref'] !== undefined) {
-		urlHistory = urlHistory || {};
-		if (urlHistory[schema['$ref']]) {
-			return this.createError(ErrorCodes.CIRCULAR_REFERENCE, {urls: Object.keys(urlHistory).join(', ')}, '', '');
-		}
-		urlHistory[schema['$ref']] = true;
-		schema = this.getSchema(schema['$ref'], urlHistory);
+
+ValidatorContext.prototype.resolveRefs = function (schema, urlHistory, schemaHistory, depth) {
+	var subSchema;
+
+	if (!depth) {
+		depth = 0;
 	}
+
+	// Magic number is just to keep from running out of stack
+	if (depth >= 75) {
+		return this.createError(ErrorCodes.CIRCULAR_REFERENCE, {urls: Object.keys(urlHistory)});
+	}
+
+	var hasValue = function(obj, val) {
+		for(var prop in obj) {
+			if(obj.hasOwnProperty(prop) && obj[prop] === val) {
+				return true;
+			}
+		}
+		return false;
+	};
+
+	if (typeof schemaHistory === "undefined") {
+		schemaHistory = [];
+	}
+
+	if (schemaHistory.indexOf(schema) >= 0) {
+		return schema;
+	}
+
+	schemaHistory.unshift(schema);
+
+	while (schema && typeof schema['$ref'] === "string") {
+		var ref = schema['$ref'];
+
+		if (! urlHistory ) {
+			urlHistory = {};
+		}
+
+		if (urlHistory[ref]) {
+			return urlHistory[ref];
+		}
+
+		if (hasValue(urlHistory, schema)) {
+			return schema;
+		}
+
+		// Assign here to prevent infinite recursion
+		urlHistory[ref] = schema;
+
+		subSchema = this.getSchema(ref, urlHistory, schemaHistory, depth);
+
+		if (typeof subSchema === "undefined") {
+			urlHistory[ref] = schema;
+			break;
+		}
+
+		// Assign here to handle situations where recursion is non-infinite
+		urlHistory[ref] = subSchema;
+		schema = subSchema;
+	}
+
+	if (Array.isArray(schema)) {
+		for (var i = 0; i < schema.length; i++) {
+			subSchema = this.resolveRefs(schema[i], urlHistory, schemaHistory, depth);
+
+			if (subSchema instanceof ValidationError) {
+				return subSchema;
+			}
+
+			schema[i] = subSchema;
+		}
+	} else if (typeof schema === "object") {
+		for (var key in schema) {
+			if (key !== "enum") {
+				subSchema = this.resolveRefs(schema[key], urlHistory, schemaHistory, depth);
+
+				if (subSchema instanceof ValidationError) {
+					return subSchema;
+				}
+
+				schema[key] = subSchema;
+			}
+		}
+	}
+
 	return schema;
 };
-ValidatorContext.prototype.getSchema = function (url, urlHistory) {
+ValidatorContext.prototype.getSchema = function (url, urlHistory, schemaHistory, depth) {
 	var schema;
 	if (this.schemas[url] !== undefined) {
 		schema = this.schemas[url];
-		return this.resolveRefs(schema, urlHistory);
+		return this.resolveRefs(schema, urlHistory, schemaHistory, depth + 1);
 	}
 	var baseUrl = url;
 	var fragment = "";
@@ -106,7 +183,7 @@ ValidatorContext.prototype.getSchema = function (url, urlHistory) {
 		schema = this.schemas[baseUrl];
 		var pointerPath = decodeURIComponent(fragment);
 		if (pointerPath === "") {
-			return this.resolveRefs(schema, urlHistory);
+			return this.resolveRefs(schema, urlHistory, schemaHistory, depth + 1);
 		} else if (pointerPath.charAt(0) !== "/") {
 			return undefined;
 		}
@@ -120,7 +197,7 @@ ValidatorContext.prototype.getSchema = function (url, urlHistory) {
 			schema = schema[component];
 		}
 		if (schema !== undefined) {
-			return this.resolveRefs(schema, urlHistory);
+			return this.resolveRefs(schema, urlHistory, schemaHistory, depth + 1);
 		}
 	}
 	if (this.missing[baseUrl] === undefined) {
@@ -129,10 +206,20 @@ ValidatorContext.prototype.getSchema = function (url, urlHistory) {
 		this.missingMap[baseUrl] = baseUrl;
 	}
 };
-ValidatorContext.prototype.searchSchemas = function (schema, url) {
+ValidatorContext.prototype.searchSchemas = function (schema, url, stack) {
+	if (typeof stack === "undefined") {
+		stack = [schema];
+	} else {
+		if (stack.indexOf(schema) >= 0) {
+			return;
+		}
+
+		stack.push(schema);
+	}
+
 	if (Array.isArray(schema)) {
 		for (var i = 0; i < schema.length; i++) {
-			this.searchSchemas(schema[i], url);
+			this.searchSchemas(schema[i], url, stack);
 		}
 	} else if (schema && typeof schema === "object") {
 		if (typeof schema.id === "string") {
@@ -145,7 +232,7 @@ ValidatorContext.prototype.searchSchemas = function (schema, url) {
 		for (var key in schema) {
 			if (key !== "enum") {
 				if (typeof schema[key] === "object") {
-					this.searchSchemas(schema[key], url);
+					this.searchSchemas(schema[key], url, stack);
 				} else if (key === "$ref") {
 					var uri = getDocumentUri(schema[key]);
 					if (uri && this.schemas[uri] === undefined && this.missingMap[uri] === undefined) {
@@ -155,6 +242,8 @@ ValidatorContext.prototype.searchSchemas = function (schema, url) {
 			}
 		}
 	}
+
+	stack.pop();
 };
 ValidatorContext.prototype.addSchema = function (url, schema) {
 	//overload
