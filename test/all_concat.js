@@ -606,6 +606,20 @@ describe("Strings 02", function () {
 		var valid = tv4.validate(data, schema);
 		assert.isFalse(valid);
 	});
+	
+  it("accepts RegExp object", function () {
+    var data = "9test";
+    var schema = {"pattern": /^[0-9][a-zA-Z]*$/};
+    var valid = tv4.validate(data, schema);
+    assert.isTrue(valid);
+  });
+
+  it("accepts RegExp literal", function () {
+    var data = "9TEST";
+    var schema = {"pattern": "/^[0-9][a-z]*$/i"};
+    var valid = tv4.validate(data, schema);
+    assert.isTrue(valid);
+  });
 });
 describe("Arrays 01", function () {
 
@@ -1212,6 +1226,10 @@ describe("$ref 01", function () {
 		tv4.normSchema(schema);
 		var valid = tv4.validate(data, schema);
 		assert.isFalse(valid);
+
+		data = {"id": 1, "$ref": 1};
+		valid = tv4.validate(data, schema);
+		assert.isTrue(valid);
 	});
 });
 
@@ -1222,8 +1240,8 @@ describe("$ref 02", function () {
 			"items": {"$ref": "http://example.com/schema#"}
 		};
 		tv4.validate([], schema);
-		assert.notProperty(tv4.missing, "http://example.com/schema");
-		assert.length(tv4.missing, 0);
+		assert.property(tv4.missing, "http://example.com/schema");
+		assert.length(tv4.missing, 1);
 		//return !tv4.missing["http://example.com/schema"]
 		//	&& tv4.missing.length == 0;
 	});
@@ -1361,8 +1379,19 @@ describe("$ref 04", function () {
 
 	it("internal $ref", function () {
 		var schema = {
+			"definitions": {
+				"list": {
+					"type": "array"
+				},
+				"nestedList": {
+					"type": "array",
+					"items": {
+						"$ref": "#/definitions/list"
+					}
+				}
+			},
 			"type": "array",
-			"items": {"$ref": "#"}
+			"items": {"$ref": "#/definitions/nestedList"}
 		};
 
 		assert.isTrue(tv4.validate([[],[[]]], schema), "List of lists should be valid");
@@ -1457,8 +1486,92 @@ describe("$refs to $refs", function () {
 		tv4.addSchema(schema);
 		var result = tv4.validateResult(42, "http://example.com/schema#/ref1");
 		
-		assert.isFalse(result.valid, "not valid");
-		assert.equal(result.error.code, tv4.errorCodes.CIRCULAR_REFERENCE, 'Error code correct');
+		assert.isTrue(result.valid, "valid since there's no meaningful stuff to validate with");
+		assert.equal(result.error, undefined);
+	});
+});
+
+describe("$refs to recursive $refs", function () {
+	it("addSchema(), $ref", function () {
+		var schema = {
+			id: "http://example.com/schema",
+			some: {
+				other: {type: "number"}
+			},
+			intermediary: {
+				'$ref': '#/some/other'
+			},
+			data: {'$ref': "#/intermediary"},
+		};
+		
+		tv4.addSchema(schema);
+		assert.isTrue(tv4.validate(42, {"$ref": "http://example.com/schema#/data"}), "42 valid");
+		//assert.isFalse(tv4.validate(42, {"$ref": "http://example.com/schema#/data"}), "\"42\" invalid");
+		
+		assert.length(tv4.missing, 0, "should have no missing schemas");
+	});
+
+	it("Don't hang on circle", function () {
+		var schema = {
+			id: "http://example.com/schema",
+			intermediary: {'$ref': '#/ref1'},
+			ref1: {"$ref": "#/intermediary"}
+		};
+
+		tv4.addSchema(schema);
+		var result = tv4.validateResult(42, "http://example.com/schema#/ref1");
+		assert.isTrue(result.valid, "should be valid since the schema does not define anything to validate");
+	});
+
+	it("works right on deeper levels", function () {
+		var schema1 = {
+			id: "http://a.b/c",
+			definitions: {
+				"a": {
+					"type": "integer"
+				}
+			}
+		};
+
+		var schema2 = {
+			id: "http://b.c/d",
+			properties: {
+				"id": {"$ref": "http://a.b/c#/definitions/a"}
+			}
+		};
+
+		tv4.addSchema(schema1);
+		tv4.addSchema(schema2);
+		var result1 = tv4.getSchema("http://b.c/d#/properties/id");
+		assert.equal(result1.type, "integer");
+
+		var result2 = tv4.validateResult(42, "http://b.c/d#/properties/id");
+		assert.isTrue(result2.valid, "should be valid");
+
+		var result3 = tv4.validateResult("string of text", "http://b.c/d#/properties/id");
+		assert.isFalse(result3.valid, "should be invalid");
+	});
+
+	it("handles self-referencing schema cleanly", function() {
+		var schema1 = {
+			"id": "http://a.b/c",
+			"definitions": {
+				"a": {
+					"type": "object",
+					"properties": {
+						"parent": {
+							"$ref": "http://a.b/c"
+						}
+					}
+				}
+			}
+		};
+
+		schema1['definitions']['b'] = schema1;
+
+		tv4.addSchema(schema1);
+
+		tv4.normSchema(schema1);
 	});
 });
 
